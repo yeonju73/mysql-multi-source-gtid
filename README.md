@@ -14,6 +14,7 @@ Source B ──┘
 ```
 
 하나의 **Replica가 여러 Source로부터 동시에 데이터를 복제**받는 구조
+
 기존 복제가 `Source 1 → Replica 1` 의 1:1 구조라면, MSR은 여러 Source의 데이터를 **하나의 Replica로 통합** 가능
 
 ### 2. Replication Channel
