@@ -1,117 +1,138 @@
-# 🚀 MySQL Multi-Source Replication with GTID
+# MySQL Multi-Source Replication (MSR) 실습
 
-분산된 여러 MySQL 마스터 서버의 데이터를 하나의 레플리카(Replica) 서버로 통합하고, **GTID(Global Transaction ID)** 를 통해 장애 발생 시 스스로 복구되는 **Self-Healing(자기 치유)** 파이프라인을 구축한 프로젝트입니다.
-
-## 🎯 Project Overview
-
-* **Objective**: 여러 마스터 서버의 실시간 데이터 통합 및 고가용성 복제 환경 구축
-* **Key Technology**: MySQL Multi-Source Replication, GTID, Docker
-* **Main Feature**: 복제 중단 후 재개 시 별도의 포지션 설정 없이 자동으로 누락된 데이터를 보정하는 "Auto-healing" 구현
+> [MySQL 8.4 Docs — 19.1.5 MySQL Multi-Source Replication](https://dev.mysql.com/doc/refman/8.4/en/replication-multi-source.html)
 
 ---
 
-## 🛠️ Infrastructure Configuration
+## 개념 정리
 
-### 1. Master Servers (Source 1 & 2)
+### MSR이란?
 
-두 대의 마스터 서버는 각각 독립된 데이터를 관리하며, 고유한 `server-id`를 가집니다.
+하나의 **Replica가 여러 Source로부터 동시에 데이터를 복제**받는 구조다.
 
-* **Common Settings (`my.cnf`)**
+기존 복제가 `Source 1 → Replica 1` 의 1:1 구조라면, MSR은 여러 Source의 데이터를 **하나의 Replica로 통합**할 수 있다.
+
+```
+Source A ──┐
+           ├──▶ Replica
+Source B ──┘
+```
+
+### 핵심 개념: Replication Channel
+
+Replica는 각 Source마다 독립적인 **Channel(채널)** 을 생성한다.  
+채널이 다르면 복제 연결도 완전히 독립적으로 동작한다.
+
+```sql
+-- Source A 채널 등록
+CHANGE REPLICATION SOURCE TO ... FOR CHANNEL 'source-a';
+
+-- Source B 채널 등록
+CHANGE REPLICATION SOURCE TO ... FOR CHANNEL 'source-b';
+```
+
+### 실습 구성
+
+| 역할 | 설명 |
+|---|---|
+| **Source A** | 첫 번째 데이터 원본 서버 |
+| **Source B** | 두 번째 데이터 원본 서버 |
+| **Replica** | Source A, B 양쪽으로부터 데이터를 복제받는 서버 |
+
+Source A와 Source B 각각에 INSERT를 수행하면, Replica에서 두 데이터가 모두 조회되는 것을 확인한다.
+
+```
+Source A  →  INSERT 'hello from A'  ──┐
+                                      ├──▶  Replica에서 두 데이터 모두 확인
+Source B  →  INSERT 'hello from B'  ──┘
+```
+
+---
+
+## 인프라 구성
+
+### 마스터 서버 설정 (Source 1 & 2)
+
+두 마스터 서버는 각각 고유한 `server-id`를 가진다.
+
 ```ini
 [mysqld]
 log-bin = mysql-bin
 gtid_mode = ON
 enforce_gtid_consistency = ON
-server-id = 1  # Master 2는 2로 설정
-
+server-id = 1  # Source 2는 2로 설정
 ```
 
+복제용 계정 생성:
 
-* **Replication Account**
 ```sql
 CREATE USER 'yeonju'@'%' IDENTIFIED BY 'password';
 GRANT REPLICATION SLAVE ON *.* TO 'yeonju'@'%';
-
 ```
 
+### 레플리카 서버 설정
 
-
-### 2. Replica Server
-
-두 마스터의 데이터를 채널별로 받아들이는 통합 서버입니다.
-
-* **Settings (`my.cnf`)**
 ```ini
 [mysqld]
 gtid_mode = ON
 enforce_gtid_consistency = ON
 server-id = 3
-
 ```
-
-
 
 ---
 
-## 🔗 Replication Setup (Multi-Source Channels)
+## 복제 채널 연결
 
-레플리카 서버에서 각 마스터를 독립된 채널로 연결합니다. **`SOURCE_AUTO_POSITION=1`**을 사용하여 바이너리 로그 포지션을 수동으로 맞출 필요가 없습니다.
+레플리카에서 각 마스터를 채널로 연결한다.  
+`SOURCE_AUTO_POSITION=1` 을 사용하면 바이너리 로그 포지션을 수동으로 지정할 필요 없이 GTID 기반으로 자동 위치를 잡는다.
 
 ```sql
--- Channel for Master 1
+-- Source 1 채널 등록
 CHANGE REPLICATION SOURCE TO 
     SOURCE_HOST='[Master1_IP]', 
     SOURCE_USER='username', 
     SOURCE_PASSWORD='password', 
     SOURCE_AUTO_POSITION=1 FOR CHANNEL 'source1_channel';
 
--- Channel for Master 2
+-- Source 2 채널 등록
 CHANGE REPLICATION SOURCE TO 
     SOURCE_HOST='[Master2_IP]', 
     SOURCE_USER='username', 
     SOURCE_PASSWORD='password', 
     SOURCE_AUTO_POSITION=1 FOR CHANNEL 'source2_channel';
 
--- Start Replication
+-- 복제 시작
 START REPLICA FOR CHANNEL 'source1_channel';
 START REPLICA FOR CHANNEL 'source2_channel';
-
 ```
 
 ---
 
-## 🧪 Verification & Test Scenarios
+## 검증
 
-### 1. Data Integration (데이터 통합)
+### 데이터 통합 확인
 
-각 마스터에 입력된 서로 다른 데이터가 레플리카에서 한꺼번에 조회되는지 확인합니다.
-
-* **Master 1**: `INSERT INTO products VALUES ('apple');`
-* **Master 2**: `INSERT INTO products VALUES ('source2-1');`
-* **Replica**: `SELECT * FROM products;` 결과로 두 데이터가 모두 출력됨을 확인.
-
-### 2. Auto-Healing Test (자기 치유)
-
-1. 레플리카 복제 중단: `STOP REPLICA;`
-2. 마스터 서버들에 추가 데이터 입력.
-3. 레플리카 복제 재개: `START REPLICA;`
-4. **관찰**: GTID 기반으로 중단되었던 시점 이후의 트랜잭션을 추적하여 자동으로 동기화 완료.
-
-### 3. Monitoring
+각 Source에 INSERT 후 Replica에서 조회한다.
 
 ```sql
--- 채널별 복제 상태 확인 (IO/SQL Running: Yes)
-SHOW REPLICA STATUS\G
+-- Source 1에서 실행
+INSERT INTO products VALUES ('apple');
 
--- 통합된 GTID 집합 확인
-SELECT @@GLOBAL.GTID_EXECUTED;
+-- Source 2에서 실행
+INSERT INTO products VALUES ('source2-1');
 
+-- Replica에서 확인
+SELECT * FROM products;
+-- → 두 데이터 모두 출력됨
 ```
 
----
+### 복제 상태 모니터링
 
-## 📝 Lessons Learned
+```sql
+-- 채널별 복제 상태 확인 (IO/SQL Running: Yes 이면 정상)
+SHOW REPLICA STATUS\G
 
-* **GTID의 강력함**: 바이너리 로그 파일명과 위치(`Pos`)를 직접 계산하지 않아도 되는 복제의 편리함을 체득함.
-* **Multi-Source Isolation**: 특정 마스터 서버의 장애나 채널 오류가 다른 마스터와의 복제에 영향을 주지 않음을 확인.
-* **Conflict Handling**: 중복 키 발생 시 복제가 중단되는 원리를 이해하고 설계 단계에서 PK 분리의 중요성을 깨달음.
+-- 복제된 GTID 집합 확인
+SELECT @@GLOBAL.GTID_EXECUTED;
+```
+
