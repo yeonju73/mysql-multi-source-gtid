@@ -7,19 +7,13 @@
 ## 개념 정리
 
 ### 1. MSR이란?
-```
-Source A ──┐
-           ├──▶ Replica
-Source B ──┘
-```
+<img width="807" height="282" alt="image" src="https://github.com/user-attachments/assets/93c46351-2f17-4725-b821-cf488309608d" />
 
 하나의 **Replica가 여러 Source로부터 동시에 데이터를 복제**받는 구조
 
 기존 복제가 `Source 1 → Replica 1` 의 1:1 구조라면, MSR은 여러 Source의 데이터를 **하나의 Replica로 통합** 가능
 
 ### 2. Replication Channel
-<img width="807" height="282" alt="image" src="https://github.com/user-attachments/assets/93c46351-2f17-4725-b821-cf488309608d" />
-
 
 Replica는 각 Source마다 독립적인 **Channel(채널)** 생성
 채널이 다르면 복제 연결도 완전히 독립적으로 동작
